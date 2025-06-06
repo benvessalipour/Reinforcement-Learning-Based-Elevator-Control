@@ -8,13 +8,26 @@ from Environment.constants import ACTIONS, NUMBER_OF_FLOORS, DIRECTION_UP, DIREC
 
 
 def simplify_state(state):
-    current_floor, move_direction, door_state, cabin_buttons, call_buttons = state
+    """
+    Kompakte Zustandsrepräsentation:
+    - floor, direction, door          : unverändert
+    - any_calls_above / below / here  : booleans, ob es ober‑ bzw. unterhalb oder auf dem aktuellen Stockwerk
+                                         noch offene Rufe (Call‑ oder Cabin‑Buttons) gibt.
+    Dadurch schrumpft der Zustandsraum drastisch, bleibt aber aussagekräftig.
+    """
+    floor, direction, door, cabin_buttons, call_buttons = state
+
+    any_calls_above = any(call_buttons[floor + 1:]) or any(cabin_buttons[floor + 1:])
+    any_calls_below = any(call_buttons[:floor])      or any(cabin_buttons[:floor])
+    on_this_floor   = call_buttons[floor] or cabin_buttons[floor]
+
     return (
-        current_floor,
-        move_direction,
-        door_state,
-        tuple(cabin_buttons),
-        tuple(call_buttons)  # call_buttons ist flache Liste
+        floor,
+        direction,
+        door,
+        any_calls_above,
+        any_calls_below,
+        on_this_floor
     )
 
 
@@ -55,19 +68,13 @@ def choose_action(state, epsilon):
     state_key = simplify_state(state)
     q_values = Q[state_key]
 
-    best_value = -float('inf')
-    best_action = allowed_actions[0]
-
-    for action in allowed_actions:
-        if q_values[action] > best_value:
-            best_value = q_values[action]
-            best_action = action
-
-    return best_action
+    best_value = max(q_values[a] for a in allowed_actions)
+    best_actions = [a for a in allowed_actions if q_values[a] == best_value]
+    return random.choice(best_actions)
 
 
 # Hyperparameter optimiert
-alpha = 0.3  # Höhere Lernrate
+alpha = 0.1  # Höhere Lernrate
 gamma = 0.9  # Weniger Fokus auf langfristige Belohnung
 epsilon = 0.3  # Mehr Exploration
 episodes = 3000
@@ -95,7 +102,7 @@ for ep in range(episodes):
         next_state_key = simplify_state(next_state)
 
         current_q = Q[state_key][action]
-        next_max = max(Q[next_state_key].values()) if next_state_key in Q else 0
+        next_max = max(Q[next_state_key].values())
         new_q = current_q + alpha * (reward + gamma * next_max - current_q)
 
         Q[state_key][action] = new_q
