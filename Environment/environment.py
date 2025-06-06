@@ -88,6 +88,7 @@ class Environment:
       The new state of the environment after taking the action.
     """
 
+    #Überprüfe erlaubten actions
     valid_actions = Environment.get_available_actions(self.state)
 
     if action not in valid_actions:
@@ -260,6 +261,48 @@ class Environment:
                   tuple(call_buttons))
 
     return self.state
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   def render(self):
     """

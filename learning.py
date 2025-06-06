@@ -1,13 +1,11 @@
-from pathlib import Path
-from tqdm import tqdm
-import numpy, pygame, imageio, matplotlib, random
-from Environment.environment import Environment
-from Environment.constants import ACTIONS
-from Environment.policy import up
-from types import SimpleNamespace
-import matplotlib.pyplot as plt
+import random
 from collections import defaultdict
-from Environment.constants import DOOR_OPEN, ACTION_DOOR, ACTION_UP, ACTION_DOWN, ACTION_NOOP, NUMBER_OF_FLOORS
+import matplotlib.pyplot as plt
+import numpy as np
+from Environment.environment import Environment
+from Environment.constants import ACTIONS, NUMBER_OF_FLOORS, DIRECTION_UP, DIRECTION_DOWN, DIRECTION_NONE, DOOR_OPEN, \
+    DOOR_CLOSED, ACTION_DOOR, ACTION_UP, ACTION_DOWN, ACTION_STOP, ACTION_NOOP
+
 
 def simplify_state(state):
     current_floor, move_direction, door_state, cabin_buttons, call_buttons = state
@@ -16,185 +14,118 @@ def simplify_state(state):
         move_direction,
         door_state,
         tuple(cabin_buttons),
-        tuple(call_buttons),
+        tuple(call_buttons)  # call_buttons ist flache Liste
     )
 
 
-def greedy_policy(state):
-    q_vals = Q[simplify_state(state)]
-    allowed = Environment.get_available_actions(state)
-    return max(allowed, key=lambda a: q_vals[a])
+def effective_reward(env, state, action, next_state, prev_persons):
+    reward = -0.05  # Kleine negative Belohnung pro Schritt
 
-def rollout(policy_fn = up, length = 1):
-    env = Environment()
-    state = env.reset()
-    tau = SimpleNamespace(x=[],u=[],x2=[])
+    current_floor, move_direction, door_state, cabin_buttons, call_buttons = state
 
-    for _ in range(length):
-        if random.random() < 0.1:
-            action = random.choice(Environment.get_available_actions(state))
-        else:
-            action = policy_fn(state)
+    # Große Belohnung für Türöffnen bei wartenden Passagieren
+    if action == ACTION_DOOR and door_state == DOOR_CLOSED:
+        if call_buttons[current_floor] or cabin_buttons[current_floor]:
+            reward += 10
 
-        next_state = env.step(action)
-        env.render()
+    # Belohnung für Richtungswechsel bei Bedarf
+    if action in [ACTION_UP, ACTION_DOWN] and move_direction == DIRECTION_NONE:
+        reward += 2
 
-        tau.x.append(state)
-        tau.u.append(action)
-        tau.x2.append(next_state)
+    # Sehr hohe Belohnung für Passagierablieferung
+    new_persons = env.get_active_persons()
+    delivered = prev_persons - new_persons
+    if delivered > 0:
+        reward += delivered * 50
 
-        state = next_state
-    return tau
+    # Strafe für unnötiges Öffnen/Schließen
+    if action == ACTION_DOOR:
+        if door_state == DOOR_OPEN and not (call_buttons[current_floor] or cabin_buttons[current_floor]):
+            reward -= 5
 
-
-# Reward-Funktion
-def g1(state, action, next_state, prev_persons, new_persons):
-    return -1 + (prev_persons - new_persons) * 20
-
-# Zweite Kostenfunktion (dünn / sparse)
-def g2(state, action, next_state, prev_persons, new_persons):
-    return 50 * (prev_persons - new_persons)
+    return reward
 
 
-# Reward-Funktion
-def g1(state, action, next_state, prev_persons, new_persons):
-    return -1 + (prev_persons - new_persons) * 20
-
-# Q-Learning Parameter
-alpha = 0.1      # Lernrate
-gamma = 0.99     # Diskontfaktor 0.95,0.9?
-epsilon = 0.1    # Epsilon-Greedy
-episodes = 500   # Anzahl Trainingsepisoden
-steps_per_episode = 100  # Schritte pro Episode
-
-# Kostenfunktion wählen
-cost_function = g1  # oder g2
-
-# Q-Table: Q[state][action] → float
-Q = defaultdict(lambda: {a: 0.0 for a in ACTIONS})
-
-# Logging
-episode_rewards = []
-
-# Epsilon-greedy Aktionswahl
-def choose_action(state):
-    allowed = Environment.get_available_actions(state)
+def choose_action(state, epsilon):
+    allowed_actions = Environment.get_available_actions(state)
 
     if random.random() < epsilon:
-        return random.choice(allowed)
+        return random.choice(allowed_actions)
 
-    q_vals = Q[simplify_state(state)]
-    # Wichtig: Nur erlaubte Aktionen betrachten!
-    return max(allowed, key=lambda a: q_vals[a])
+    state_key = simplify_state(state)
+    q_values = Q[state_key]
 
-# Training Loop
+    best_value = -float('inf')
+    best_action = allowed_actions[0]
+
+    for action in allowed_actions:
+        if q_values[action] > best_value:
+            best_value = q_values[action]
+            best_action = action
+
+    return best_action
+
+
+# Hyperparameter optimiert
+alpha = 0.3  # Höhere Lernrate
+gamma = 0.9  # Weniger Fokus auf langfristige Belohnung
+epsilon = 0.3  # Mehr Exploration
+episodes = 3000
+steps_per_episode = 400
+
+Q = defaultdict(lambda: {a: 0.0 for a in ACTIONS})
+rewards = []
+moving_avgs = []
+
 for ep in range(episodes):
-    env = Environment(render_mode="none")  # kein Pygame-Fenster
+    env = Environment(render_mode="none")
     state = env.reset()
     total_reward = 0
 
     for step in range(steps_per_episode):
-        action = choose_action(state)
-        prev_persons = env.get_active_persons()  # Personen VOR der Aktion
-        next_state = env.step(action)  # Aktion wird NUR EINMAL ausgeführt
-        new_persons = env.get_active_persons()  # Personen NACH der Aktion
-        reward = cost_function(state, action, next_state, prev_persons, new_persons)
+        prev_persons = env.get_active_persons()
+        action = choose_action(state, epsilon)
+        next_state = env.step(action)
 
-        # Q-Learning Update
-        allowed_next = Environment.get_available_actions(next_state)
-        best_next = max(Q[simplify_state(next_state)][a] for a in allowed_next) if allowed_next else 0
-        Q[simplify_state(state)][action] = (1 - alpha) * Q[simplify_state(state)][action] + alpha * (reward + gamma * best_next)
-
-        state = next_state
+        reward = effective_reward(env, state, action, next_state, prev_persons)
         total_reward += reward
 
-    episode_rewards.append(total_reward)
-    if (ep + 1) % 50 == 0:
-        print(f"Episode {ep+1}: Total Reward = {total_reward}")
+        # Q-Learning Update mit Fehlerbehandlung
+        state_key = simplify_state(state)
+        next_state_key = simplify_state(next_state)
 
-# Vergleich von g1 und g2
-def train(cost_fn, label):
-    Q_local = defaultdict(lambda: {a: 0.0 for a in ACTIONS})
-    rewards = []
+        current_q = Q[state_key][action]
+        next_max = max(Q[next_state_key].values()) if next_state_key in Q else 0
+        new_q = current_q + alpha * (reward + gamma * next_max - current_q)
 
-    for ep in range(episodes):
-        env = Environment(render_mode="none")
-        state = env.reset()
-        total_reward = 0
+        Q[state_key][action] = new_q
+        state = next_state
 
-        for step in range(steps_per_episode):
-            allowed = Environment.get_available_actions(state)
-            if random.random() < epsilon:
-                action = random.choice(allowed)
-            else:
-                q_vals = Q_local[simplify_state(state)]
-                action = max(allowed, key=lambda a: q_vals[a])
+    rewards.append(total_reward)
 
-            prev_persons = env.get_active_persons()
-            next_state = env.step(action)
-            new_persons = env.get_active_persons()
-            reward = cost_fn(state, action, next_state, prev_persons, new_persons)
+    # Gleitenden Durchschnitt berechnen
+    if ep >= 100:
+        moving_avg = np.mean(rewards[-100:])
+        moving_avgs.append(moving_avg)
 
-            allowed_next = Environment.get_available_actions(next_state)
-            best_next = max(Q_local[simplify_state(next_state)][a] for a in allowed_next) if allowed_next else 0
-            Q_local[simplify_state(state)][action] = (1 - alpha) * Q_local[simplify_state(state)][action] + alpha * (reward + gamma * best_next)
+    # Epsilon verringern
+    epsilon = max(0.05, epsilon * 0.995)
 
-            state = next_state
-            total_reward += reward
+    # Fortschrittsausgabe
+    if ep % 200 == 0:
+        avg_reward = np.mean(rewards[-50:]) if len(rewards) > 50 else total_reward
+        print(f"Episode {ep:04d}/{episodes} | Reward: {total_reward:7.1f} | Avg: {avg_reward:7.1f} | ε: {epsilon:.3f}")
 
-        rewards.append(total_reward)
-        if (ep + 1) % 50 == 0:
-            print(f"{label} Episode {ep+1}: Total Reward = {total_reward}")
-    return rewards
-
-rewards_g1 = train(g1, "g1")
-rewards_g2 = train(g2, "g2")
-
-# Fortschritt anzeigen
-plt.plot(rewards_g1, label="g1: -1 + 20 * (prev-new)")
-plt.plot(rewards_g2, label="g2: 50 * (prev-new)")
+# Lernkurve mit gleitendem Durchschnitt plotten
+plt.figure(figsize=(12, 6))
+plt.plot(rewards, alpha=0.3, label='Episode Rewards')
+if moving_avgs:
+    plt.plot(range(100, 100 + len(moving_avgs)), moving_avgs, 'r-', linewidth=2, label='Moving Avg (100 episodes)')
 plt.xlabel("Episode")
 plt.ylabel("Total Reward")
-plt.title("Vergleich der Kostenfunktionen")
+plt.title("Verbesserte Lernkurve des Aufzug-Agents")
 plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.savefig("improved_learning_curve.png")
 plt.show()
-
-def reference_policy(state):
-    current_floor, move_direction, door_state, cabin_buttons, call_buttons = state
-    allowed = Environment.get_available_actions(state)
-
-    # Wenn Tür offen, schließe sie
-    if door_state == DOOR_OPEN:
-        return ACTION_DOOR
-
-    # Falls jemand aussteigen will → anhalten & Tür öffnen
-    if cabin_buttons[current_floor] or call_buttons[current_floor]:
-        if ACTION_DOOR in allowed:
-            return ACTION_DOOR
-
-    # Falls Kabinenziel gedrückt ist → fahre in Richtung Ziel
-    for dir_action, dir_delta in [(ACTION_UP, +1), (ACTION_DOWN, -1)]:
-        next_floor = current_floor + dir_delta
-        if 0 <= next_floor < NUMBER_OF_FLOORS:
-            if cabin_buttons[next_floor] or call_buttons[next_floor]:
-                if dir_action in allowed:
-                    return dir_action
-
-    # Suche nächstes Ziel in beliebiger Richtung
-    for f in range(NUMBER_OF_FLOORS):
-        if cabin_buttons[f] or call_buttons[f]:
-            if f > current_floor and ACTION_UP in allowed:
-                return ACTION_UP
-            elif f < current_floor and ACTION_DOWN in allowed:
-                return ACTION_DOWN
-
-    # Kein Ziel: nichts tun
-    return ACTION_NOOP
-
-print("Evaluating greedy policy:")
-tau = rollout(policy_fn=greedy_policy, length=100)
-print("Steps:", len(tau.x))
-
-print("Evaluating reference policy:")
-tau = rollout(policy_fn=reference_policy, length=100)
-print("Steps:", len(tau.x))
