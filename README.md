@@ -73,4 +73,17 @@ Um eine gelernte Policy in einer Episode zu demonstrieren, verwenden Sie:
 python demonstration.py
 ```
 
+## 📄 Bericht / Dokumentation
+
+Der vollständige Projektbericht mit Methodik, Versuchsaufbau, Lernkurven und Ergebnisanalyse ist hier verfügbar:
+
+👉 [Q-Learning Elevator control (PDF)](https://drive.google.com/file/d/1YxnPScZop35mV5LH4GEtGzOqSD5p0v47/view?usp=share_link)
+
+Der Bericht enthält:
+- mathematische Beschreibung des Q-Learning-Algorithmus
+- die vereinfachte Zustandsrepräsentation
+- die Definition der Kostenfunktionen `g1` und `g2`
+- experimentelle Evaluation mit Hyperparameter-Variation
+- Vergleich mit Referenzstrategie
+
 Das Skript verwendet die beste bekannte Policy basierend auf dem Q-Table aus `learning.py` und zeigt exemplarisch den Ablauf einer Episode.
